@@ -1,0 +1,71 @@
+.pe-canvas{height:100%;min-height:380px;overflow:auto;background:#f1f3f5;touch-action:none;padding:12px;box-sizing:border-box}
+.pe-canvas>svg{display:block;width:100%;max-width:100%;min-height:240px;background:white;outline:none;user-select:none}
+.pe-area{fill:rgba(30,140,160,.12);stroke:#1e8ca0;stroke-width:1.5;cursor:pointer}
+.pe-selected{fill:rgba(255,179,0,.25);stroke:#b87700;stroke-width:2}
+.pe-vertex{fill:white;stroke:#176f80;stroke-width:1.5;cursor:move}
+.pe-marker{fill:#e94b35;stroke:white;stroke-width:1;cursor:move}
+.pe-label{fill:#833018;pointer-events:none;paint-order:stroke;stroke:white;stroke-width:1}
+.pe-draft{fill:none;stroke:#176f80;stroke-width:2;stroke-dasharray:6 4}
+.pe-snap{fill:#85e59f;stroke:#148433}
+.pe-thumb{max-width:96px;max-height:54px;object-fit:contain;display:block}
+.pe-note{padding:12px;background:#f7f8f9;line-height:1.6}
+.pe-properties .x-form-item{margin:12px}
+@media(max-width:760px){.pe-desktop-only{display:none!important}}
+.pe-preview{position:relative;margin:12px;background:white}
+.pe-preview>img{display:block;width:100%;height:auto}
+.pe-preview>.plan-svg__svg{position:absolute;inset:0;width:100%;height:100%}
+.pe-preview .path-item{fill:rgba(30,140,160,.12);stroke:#1e8ca0;stroke-width:1}
+/* PlanPoint 0.2.0: keep native MODX fields, grids and windows. */
+.pe-scheme-grid .x-grid3-cell-inner{padding-top:12px;padding-bottom:12px;white-space:normal;line-height:1.5}
+.pe-thumb{width:100px;height:62px;max-width:100px;max-height:62px;object-fit:contain;border:1px solid #e5e9ec;border-radius:3px;background:white}
+.pe-row-title{font-weight:600;color:#263b47;font-size:13px}
+.pe-row-meta{color:#7a8992;margin-top:5px;font-size:11px}
+.pe-floor-summary{color:#475b67;line-height:1.6}
+.pe-row-action{width:22px;height:22px;padding:3px;margin:6px 2px 0 0;border-radius:3px;cursor:pointer;box-sizing:content-box}
+.pe-row-action:hover{background:#e8eef1}
+.pe-empty{text-align:center;padding:36px 20px;color:#7b8b95;line-height:1.9}
+.pe-empty b{color:#344c5b;font-size:15px}
+.pe-properties fieldset{margin:0 0 12px;padding:10px;border-color:#dfe5e9;border-radius:3px}
+.pe-properties .x-form-item{margin:0 0 12px}
+.pe-properties .x-btn{margin:4px 5px 7px 0}
+.pe-editor-window .x-window-bbar .x-toolbar{padding:9px 12px}
+.pe-work-state{color:#607581;margin-right:24px}
+.pe-unsaved{color:#a96e18;font-weight:600}
+.pe-saved{color:#4a8169}
+.pe-floor-card{display:flex;align-items:center;gap:16px;padding:16px;background:#f8fafb;border-bottom:1px solid #e3e9ec;line-height:1.8}
+.pe-floor-card p{margin:3px 0;color:#81929c}
+.pe-editor-window .pe-canvas{padding:20px;background:#eef2f4;background-image:radial-gradient(#d5dde2 .8px,transparent .8px);background-size:12px 12px}
+.pe-editor-window .pe-canvas>svg{box-shadow:0 2px 12px #21374715}
+.pe-create-preview{margin:4px 0 12px;padding:18px;background:#f4f7f9;border:1px dashed #cdd9e0;border-radius:3px;text-align:center;line-height:1.7;color:#78909d}
+.pe-create-preview img{display:block;max-height:170px;max-width:100%;margin:auto;object-fit:contain}
+.pe-scheme-grid .x-action-col-cell .x-grid3-cell-inner{white-space:nowrap;padding-left:4px;padding-right:4px}
+/* PlanPoint 0.2: drawing tools and compact contour properties. */
+.pe-selected{fill:rgba(0,158,158,.20);stroke:#009e9e;stroke-width:2.5}
+.pe-draft{fill:none;stroke:#008f96;stroke-width:2;stroke-dasharray:none;pointer-events:none}
+.pe-draft-preview{fill:rgba(0,158,158,.14);stroke:#009e9e;stroke-width:1.5;stroke-dasharray:6 4;pointer-events:none}
+.pe-snap{fill:#009e9e;stroke:white;stroke-width:2.5}
+.pe-editor-window .x-window-bbar .x-toolbar{min-height:38px;padding:8px 12px}
+.pe-editor-window .x-toolbar .x-btn-icon img{width:22px;height:22px}
+.pe-editor-window .x-btn-pressed{background:#cdeceb;border-radius:3px}
+.pp-hint{display:inline-block;color:#4f6673;margin-right:20px;white-space:normal;line-height:1.6}
+.pp-image-preview{padding:18px;text-align:center;background:#f2f5f7;margin:15px 0}
+.pp-image-preview img{max-width:100%;max-height:380px;object-fit:contain}
+.pp-actions{display:flex;flex-wrap:wrap;gap:5px}
+.pp-row-button{padding:6px 8px;border:1px solid #d2dce2;border-radius:3px;background:#fff;color:#476271;font:12px Arial;cursor:pointer}
+.pp-row-button:hover{background:#e6f3f2;border-color:#79aaa7}
+.pp-remove{color:#ad4740}
+.pp-tools{background:#f4f7f8;border-right:1px solid #dce4e8!important}
+.pp-tools .x-panel-body{padding:8px;box-sizing:border-box;background:#f4f7f8}
+.pp-tools .x-btn{display:block;margin:0 0 7px!important}
+.pe-editor-window .pp-hint{max-width:calc(100vw - 260px);font-size:11px}
+.pe-canvas>svg{min-height:0;height:auto}
+.pp-help{padding:18px 22px;background:#f6f8f9;border-top:1px solid #dce4e8;box-sizing:border-box;color:#4f6673;line-height:1.7;font-size:12px}
+.pp-help h3{margin:0 0 10px;font-size:14px;color:#344c5b}
+.pp-help p{margin:0 0 9px}
+.pp-tools table.x-btn{display:table!important;width:44px!important;height:38px!important;table-layout:fixed}
+.pp-tools .x-btn button{width:36px!important;height:32px!important;min-width:0!important;padding:0!important;background-position:center!important}
+.pp-tool{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:44px;height:40px;margin:0 0 7px;padding:0;border:1px solid #d7e0e5;border-radius:3px;background:#fff;cursor:pointer}
+.pp-tool img{display:block;width:22px;height:22px;pointer-events:none}
+.pp-tool:hover{background:#e7f2f3;border-color:#83b8b8}
+.pp-tool.pp-active{background:#cdeceb;border-color:#30999b}
+.pp-tool:focus-visible{outline:2px solid #30999b;outline-offset:1px}

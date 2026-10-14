@@ -1,0 +1,14 @@
+# Local environment and generated runtime files
+.env
+.env.*
+config.core.php
+core/config/
+node_modules/
+.cache/
+coverage/
+*.log
+.DS_Store
+_build/packages/
+
+.artifacts/
+package-lock.json

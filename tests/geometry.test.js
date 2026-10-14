@@ -1,0 +1,14 @@
+'use strict';
+const assert=require('node:assert/strict'),G=require('../assets/components/planpoint/js/geometry.js');
+assert.deepEqual(G.points('m 10 10 30 0 v30 H10 z'),[[10,10],[40,10],[40,40],[10,40]]);
+assert.equal(G.key('','06'),'x-06');assert.equal(G.key('2','6А'),'x2-6А');
+assert.throws(()=>G.key('','<script>'));assert.throws(()=>G.points('M0 0 C1 1 2 2 3 3 Z'));
+assert.throws(()=>G.points('M0 0 L10 0 L0 10 Z M0 0 L2 2 L3 3 Z'));
+assert.throws(()=>G.points('M0 0 L1e999 2 L3 4 Z'));
+const concave=[[0,0],[10,0],[10,2],[2,2],[2,10],[0,10]];
+assert(G.inside(G.center(concave),concave));
+assert.equal(G.nextNumber([{key:'x-1'},{key:'x-3'}],''),'2');
+const polygon=[[1.12345,2],[30,10],[3,40]];assert.deepEqual(G.points(G.path(polygon)),polygon);
+assert.equal(G.floorSummary([{number:'2',section:'Подъезд 1'},{number:'3',section:'Подъезд 1'},{number:'4',section:'Подъезд 1'},{number:'6',section:'Подъезд 1'}]),'Подъезд 1: этажи 2–4, 6');
+assert.equal(G.floorSummary([]),'Не назначена');
+console.log('Geometry: 12 assertions passed');
