@@ -1,8 +1,8 @@
 'use strict';
-// Uses the genuine Ext JS bundled with a local MODX 2.8.5 source checkout.
+// Uses the genuine Ext JS bundled with a local MODX 2.8 / 3.2 source checkout.
 // MODX_SOURCE=/path/to/revolution node tests/browser.test.js
 const {chromium}=require('playwright'),http=require('http'),fs=require('fs'),path=require('path'),assert=require('assert/strict');
-const source=process.env.MODX_SOURCE;if(!source)throw Error('Set MODX_SOURCE to MODX 2.8.5 source directory');
+const source=process.env.MODX_SOURCE;if(!source)throw Error('Set MODX_SOURCE to a MODX source directory');
 const project=path.resolve(__dirname,'..');
 const output=process.env.PLAYWRIGHT_OUTPUT_DIR||path.join(project,'.artifacts');fs.mkdirSync(output,{recursive:true});
 const initialSvg='<svg class="plan-svg__svg" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg"></svg>';
@@ -12,10 +12,10 @@ const server=http.createServer((req,res)=>{
     if(url.pathname==='/api'){
         let body='';req.on('data',c=>body+=c);req.on('end',()=>{const p=new URLSearchParams(body);calls.push(Object.fromEntries(p));let data;
             switch(p.get('op')){
-                case 'list':data=schemes;break;
+                case 'list':data=schemes.map(({svg_code,...summary})=>summary);break;
                 case 'get':data=schemes[0];break;
-                case 'save':{let s={id:1,revision:schemes.length?schemes[0].revision+1:1,title:p.get('title'),section:p.get('section')||'',svg_code:p.get('svg_code'),show_pins:Number(p.get('show_pins')),image:{path:'plans/test.png',url:'/image.png',width:800,height:500},assignments:[]};schemes=[s];data=s;break;}
-                case 'image':data={path:p.get('path'),url:'/image.png',width:1200,height:700};break;
+                case 'save':{let s={id:1,revision:schemes.length?schemes[0].revision+1:1,title:p.get('title'),section:p.get('section')||'',svg_code:p.get('svg_code'),show_pins:Number(p.get('show_pins')),image:{source:1,path:'plans/test.png',url:'/image.png',width:800,height:500},assignments:[]};schemes=[s];data=s;break;}
+                case 'image':data={source:1,path:p.get('path'),url:'/image.png',width:1200,height:700};break;
                 case 'validate':data={svg:p.get('code'),viewbox:'0 0 800 500'};break;
                 case 'houses':data=[{id:1,title:'Дом 1'},{id:2,title:'Дом 2'}];break;
                 case 'floors':data=[{id:10,title:'Этаж 10',number:'10',section:'Подъезд 1',assignment:null},{id:11,title:'Этаж 11',number:'11',section:'Подъезд 1',assignment:null}];break;
@@ -43,6 +43,7 @@ try{
     await page.goto(base+'/canvas');
     await page.evaluate(()=>editor.start());
     await page.evaluate(()=>{editor.draft=[[100,100]];});
+    await page.evaluate(()=>{var host=document.createElement('div');document.body.appendChild(host);var disabled=new PlanPointCanvas(host,{section:'',show_pins:'0',image:{url:'/image.png'},svg_code:editor.original});disabled.draft=[[0,0],[10,0],[0,10]];disabled.close(false);if(disabled.pins.length)throw Error('Disabled string flag created a pin');disabled.destroy();host.remove();});
     const originalDraft=await page.evaluate(()=>JSON.stringify(editor.draft));
     await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>editor.draft.length),0);
     await page.keyboard.press('Control+z');assert.equal(await page.evaluate(()=>JSON.stringify(editor.draft)),originalDraft);
@@ -63,10 +64,10 @@ try{
     await click(550,330);await click(700,350);await click(680,440);await click(550,330);
     assert(await page.evaluate(()=>{var pts=editor.areas[editor.areas.length-1].points;return pts.every((p,i)=>{var q=pts[(i+1)%pts.length];return Math.abs(p[0]-q[0])<.001||Math.abs(p[1]-q[1])<.001;});}));
     await page.keyboard.press('Control+z');assert.equal(await page.evaluate(()=>editor.areas.length),2);assert.equal(await page.evaluate(()=>editor.draft.length),3);
-        schemes=[{id:1,title:'Типовая',section:'',image:{url:'/image.png',path:'plans/test.png',width:800,height:500},assignments:[],floor_labels:[],revision:1,show_pins:1,svg_code:serialized}];
+        schemes=[{id:1,title:'Типовая',section:'2-A',image:{url:'/image.png',path:'plans/test.png',width:800,height:500},assignments:[],floor_labels:[],revision:1,show_pins:1,svg_code:serialized.replace(/x-06/g,'x2-A-06')}];
     await page.goto(base+'/');assert.equal(await page.evaluate(()=>Ext.getCmp('modx-resource-tabs').getActiveTab().title),'Ресурс');assert.equal(await page.locator('.pe-scheme-grid').count(),0);await page.getByText('Планировки',{exact:true}).click();await page.getByText('Типовая',{exact:true}).click();await page.locator('.pe-scheme-grid button[data-act=edit]').first().click();
     await page.waitForSelector('.pe-editor-window.zoom-in');await page.waitForTimeout(300);await page.waitForSelector('.pe-canvas svg');assert.equal(await page.locator('.pe-area').count(),2);
-    await page.locator('.pe-area').first().click({position:{x:35,y:35}});await page.locator('.pe-properties input').nth(1).fill('x-07');await page.locator('.pe-properties input').nth(1).press('Tab');
+    await page.locator('.pe-area').first().click({position:{x:35,y:35}});assert.equal(await page.locator('.pe-properties input').first().inputValue(),'06');await page.locator('.pe-properties input').first().fill('07');await page.locator('.pe-properties input').first().press('Tab');assert.equal(await page.locator('.pe-properties input').nth(1).inputValue(),'x2-A-07');await page.locator('.pe-properties input').nth(1).fill('x-07');await page.locator('.pe-properties input').nth(1).press('Tab');
     await page.locator('.pp-tools .pp-tool').last().click();
     await page.screenshot({path:path.join(output,'planpoint-editor.png')});
     await page.keyboard.press('n');await page.locator('.pe-canvas svg').click({position:{x:70,y:70}});await page.locator('.pe-canvas svg').click({position:{x:170,y:70}});assert.equal(await page.locator('.pe-draft').count(),1);await page.keyboard.press('Escape');assert.equal(await page.locator('.pe-draft').count(),0);assert.equal(await page.locator('.pe-area').count(),2);await page.keyboard.press('Escape');
@@ -81,7 +82,7 @@ try{
         await page.waitForTimeout(100);await page.getByText('Использовать изображение',{exact:true}).click();
     }
     assert.equal(await page.locator('.pe-canvas svg').getAttribute('viewBox'),'0 0 1200 700');assert.equal(await page.evaluate(()=>browserCreations),1);assert.equal(await page.evaluate(()=>resourceChanges),0);
-    await page.getByText('Код SVG',{exact:true}).click();await page.getByText('Редактировать SVG · Ace',{exact:true}).click();await page.waitForSelector('.ace_editor');assert(await page.evaluate(()=>ace.edit(document.querySelector('.ace_editor')).getValue().includes('x-07')));await page.getByText('Применить',{exact:true}).click();await page.waitForTimeout(150);assert(calls.some(c=>c.op==='validate'));await page.getByText('Редактор',{exact:true}).click();await page.keyboard.press('Control+s');await page.waitForTimeout(150);await page.getByText('Закрыть',{exact:true}).click();
+    await page.getByText('Редактор',{exact:true}).click();await page.keyboard.press('Control+z');await page.keyboard.press('Control+z');assert.equal(await page.locator('.pe-canvas svg').getAttribute('viewBox'),'0 0 800 500');await page.keyboard.press('Control+Shift+z');await page.keyboard.press('Control+Shift+z');assert.equal(await page.locator('.pe-canvas svg').getAttribute('viewBox'),'0 0 1200 700');await page.getByText('Код SVG',{exact:true}).click();await page.getByText('Редактировать SVG · Ace',{exact:true}).click();await page.waitForSelector('.ace_editor');assert(await page.evaluate(()=>ace.edit(document.querySelector('.ace_editor')).getValue().includes('x-07')));await page.getByText('Применить',{exact:true}).click();await page.waitForTimeout(150);assert(calls.some(c=>c.op==='validate'));await page.getByText('Редактор',{exact:true}).click();await page.keyboard.press('Control+s');await page.waitForTimeout(150);await page.getByText('Закрыть',{exact:true}).click();
     await page.screenshot({path:path.join(output,'planpoint-list.png')});
     const search=page.locator('.pe-scheme-grid input.x-form-text').first();await search.fill('Нет совпадений');await search.press('Enter');await page.getByText('Добавьте первую схему',{exact:true}).waitFor();await search.fill('');await search.press('Enter');await page.getByText('Типовая',{exact:true}).waitFor();
     await page.locator('.pe-scheme-grid button[data-act=assign]').first().click();await page.getByText('10',{exact:true}).waitFor();

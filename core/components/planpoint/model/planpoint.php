@@ -1,15 +1,16 @@
 <?php
 require_once __DIR__.'/document.php';
+require_once __DIR__.'/compat.php';
 class PlanPoint
 {
-    public $modx; private $mediaContext='web'; private $db; private $s; private $a; private $l;
+    public $modx; private $mediaContext='web'; private $db; private $s; private $a; private $l; private $requests;
     public function __construct($modx)
     {
         $this->modx=$modx;
         if (!$modx->connect()) throw new RuntimeException('Не удалось подключиться к базе данных.'); $this->db=$modx->pdo;
         $prefix=$modx->getOption('table_prefix',null,'modx_');
         if (!preg_match('/^[a-zA-Z0-9_]*$/',$prefix)) throw new RuntimeException('Invalid prefix');
-        $this->s=$prefix.'planpoint_schemes'; $this->a=$prefix.'planpoint_assignments'; $this->l=$prefix.'planpoint_locks';
+        $this->s=$prefix.'planpoint_schemes'; $this->a=$prefix.'planpoint_assignments'; $this->l=$prefix.'planpoint_locks'; $this->requests=$prefix.'planpoint_requests';
     }
     public function ids($kind)
     {
@@ -18,12 +19,12 @@ class PlanPoint
     private function query($sql,$values=array())
     {
         $q=$this->db->prepare($sql);
-        if (!$q || !$q->execute($values)) throw new RuntimeException('Ошибка базы данных.');
+        if (!$q || !$q->execute($values)) { $info=$q?$q->errorInfo():$this->db->errorInfo(); $this->modx->log(1,'[PlanPoint SQL] '.json_encode($info)); throw new RuntimeException('Ошибка базы данных. Подробности в журнале PlanPoint.'); }
         return $q;
     }
     public function resource($id, $access=true)
     {
-        $r=$this->modx->getObject('modResource',array('id'=>(int)$id,'deleted'=>0));
+        $r=$this->modx->getObject(PlanPointPlatform::model('modResource'),array('id'=>(int)$id,'deleted'=>0));
         if (!$r) throw new InvalidArgumentException('Ресурс не найден.');
         if ($access && !$r->checkPolicy('view')) throw new RuntimeException('Нет доступа к ресурсу.');
         return $r;
@@ -51,7 +52,7 @@ class PlanPoint
     {
         $templates=$this->ids('house'); if (!$templates) return array();
         $out=array();
-        foreach($this->modx->getCollection('modResource',array('template:IN'=>$templates,'deleted'=>0)) as $house) {
+        foreach($this->modx->getCollection(PlanPointPlatform::model('modResource'),array('template:IN'=>$templates,'deleted'=>0)) as $house) {
             if ($house->checkPolicy('view')) $out[]=array('id'=>(int)$house->get('id'),'title'=>$house->get('pagetitle'));
         }
         usort($out,function($a,$b){return strnatcasecmp($a['title'],$b['title']);}); return $out;
@@ -59,12 +60,12 @@ class PlanPoint
     public function floors($houseId)
     {
         $house=$this->house($houseId); $out=array();
-        $children=$this->modx->getCollection('modResource',array('parent'=>(int)$houseId,'deleted'=>0,'context_key'=>$house->get('context_key')));
+        $children=$this->modx->getCollection(PlanPointPlatform::model('modResource'),array('parent'=>(int)$houseId,'deleted'=>0,'context_key'=>$house->get('context_key')));
         foreach ($children as $r) {
             if (!$r->checkPolicy('view')) continue;
             if (in_array((int)$r->get('template'),$this->ids('floor'),true)) $out[]=$this->floorData($r,'');
             elseif (in_array((int)$r->get('template'),$this->ids('section'),true)) {
-                $fs=$this->modx->getCollection('modResource',array('parent'=>$r->get('id'),'deleted'=>0,'context_key'=>$house->get('context_key')));
+                $fs=$this->modx->getCollection(PlanPointPlatform::model('modResource'),array('parent'=>$r->get('id'),'deleted'=>0,'context_key'=>$house->get('context_key')));
                 foreach ($fs as $f) if ($f->checkPolicy('view') && in_array((int)$f->get('template'),$this->ids('floor'),true)) $out[]=$this->floorData($f,$r->get('pagetitle'));
             }
         }
@@ -76,12 +77,14 @@ class PlanPoint
         $id=(int)$r->get('id'); $a=$this->query("SELECT * FROM {$this->a} WHERE floor_id=?",array($id))->fetch(PDO::FETCH_ASSOC);
         return array('id'=>$id,'title'=>$r->get('pagetitle'),'number'=>$r->get($this->modx->getOption('planpoint.floor_number_field',null,'menutitle')),'section'=>$section,'assignment'=>$a?:null);
     }
-    public function get($id, $access=true)
+    public function get($id, $access=true, $details=true)
     {
         $s=$this->query("SELECT * FROM {$this->s} WHERE id=?",array((int)$id))->fetch(PDO::FETCH_ASSOC);
         if (!$s) throw new InvalidArgumentException('Схема не найдена.');
         if ($access) $this->house($s['house_id']);
         $s['image']=json_decode($s['image_json'],true);
+        $s['show_pins']=(int)$s['show_pins'];
+        if (!$details) return $s;
         $s['assignments']=$this->query("SELECT * FROM {$this->a} WHERE scheme_id=?",array((int)$id))->fetchAll(PDO::FETCH_ASSOC);
         $s['floor_labels']=array();
         foreach($s['assignments'] as $assignment) {
@@ -96,22 +99,50 @@ class PlanPoint
     }
     public function listing($id)
     {
-        $this->house($id); $out=array();
-        $q=$this->query("SELECT id FROM {$this->s} WHERE house_id=? ORDER BY id DESC",array((int)$id));
-        foreach($q->fetchAll(PDO::FETCH_COLUMN) as $sid) $out[]=$this->get($sid);
-        return $out;
+        $this->house($id); $out=array(); $ids=array();
+        $rows=$this->query("SELECT id,house_id,title,section,image_json,show_pins,revision FROM {$this->s} WHERE house_id=? ORDER BY id DESC",array((int)$id))->fetchAll(PDO::FETCH_ASSOC);
+        $assignments=$this->query("SELECT a.* FROM {$this->a} a INNER JOIN {$this->s} s ON s.id=a.scheme_id WHERE s.house_id=?",array((int)$id))->fetchAll(PDO::FETCH_ASSOC);
+        foreach($assignments as $a) $ids[]=(int)$a['floor_id'];
+        $floors=array();$parents=array();$parentIds=array();
+        if ($ids) foreach($this->modx->getCollection(PlanPointPlatform::model('modResource'),array('id:IN'=>array_unique($ids),'deleted'=>0)) as $f) {if($f->checkPolicy('view')){$floors[(int)$f->get('id')]=$f;$parentIds[]=(int)$f->get('parent');}}
+        if ($parentIds) foreach($this->modx->getCollection(PlanPointPlatform::model('modResource'),array('id:IN'=>array_unique($parentIds),'deleted'=>0)) as $p) if($p->checkPolicy('view'))$parents[(int)$p->get('id')]=$p;
+        $byScheme=array();foreach($assignments as $a)$byScheme[(int)$a['scheme_id']][]=$a;
+        foreach($rows as $s) {
+            $s['image']=json_decode($s['image_json'],true);unset($s['image_json']);$s['show_pins']=(int)$s['show_pins'];
+            $s['assignments']=isset($byScheme[(int)$s['id']])?$byScheme[(int)$s['id']]:array();$s['floor_labels']=array();
+            foreach($s['assignments'] as $a){$f=isset($floors[(int)$a['floor_id']])?$floors[(int)$a['floor_id']]:null;$p=$f&&isset($parents[(int)$f->get('parent')])?$parents[(int)$f->get('parent')]:null;
+                $s['floor_labels'][]=array('id'=>(int)$a['floor_id'],'number'=>$f?$f->get($this->modx->getOption('planpoint.floor_number_field',null,'menutitle')):'','title'=>$f?$f->get('pagetitle'):'#'.$a['floor_id'],'section'=>$p&&in_array((int)$p->get('template'),$this->ids('section'),true)?$p->get('pagetitle'):'');
+            }$out[]=$s;
+        }return $out;
     }
-    private function transaction($houseId,$fn)
+    private function transaction($houseId,$fn,$request=null)
     {
-        $this->db->beginTransaction();
+        if ($this->db->inTransaction() || !$this->db->beginTransaction()) throw new RuntimeException('Не удалось начать отдельную транзакцию PlanPoint.');
         try {
             $mysql=$this->db->getAttribute(PDO::ATTR_DRIVER_NAME)==='mysql';
             $this->query(($mysql?'INSERT IGNORE':'INSERT OR IGNORE')." INTO {$this->l} (house_id) VALUES (0)");
             $this->query("SELECT house_id FROM {$this->l} WHERE house_id=0".($mysql?' FOR UPDATE':''))->fetch();
             $this->query(($mysql?'INSERT IGNORE':'INSERT OR IGNORE')." INTO {$this->l} (house_id) VALUES (?)",array((int)$houseId));
             $this->query("SELECT house_id FROM {$this->l} WHERE house_id=?".($mysql?' FOR UPDATE':''),array((int)$houseId))->fetch();
-            $out=$fn(); $this->db->commit(); return $out;
+            if ($request) {
+                $prior=$this->query("SELECT operation,payload_hash,result_json FROM {$this->requests} WHERE request_key=?",array($request['key']))->fetch(PDO::FETCH_ASSOC);
+                if ($prior) {
+                    if ($prior['operation']!==$request['op'] || $prior['payload_hash']!==$request['hash']) throw new InvalidArgumentException('Ключ запроса уже использован для другого действия. Обновите форму.');
+                    $ids=json_decode($prior['result_json'],true); $out=array();foreach($ids as $id)$out[]=$this->get($id);
+                    if(!$this->db->commit())throw new RuntimeException('Не удалось подтвердить транзакцию.');
+                    return $request['op']==='create'?$out[0]:$out;
+                }
+            }
+            $out=$fn();
+            if ($request) $this->query("INSERT INTO {$this->requests} (request_key,operation,payload_hash,result_json,created_at) VALUES (?,?,?,?,?)",array($request['key'],$request['op'],$request['hash'],json_encode($request['op']==='create'?array((int)$out['id']):array_column($out,'id')),date('Y-m-d H:i:s')));
+            if (!$this->db->commit()) throw new RuntimeException('Не удалось подтвердить транзакцию PlanPoint.'); return $out;
         } catch (Throwable $e) { if ($this->db->inTransaction()) $this->db->rollBack(); throw $e; }
+    }
+    private function request($operation,$key,$payload)
+    {
+        if (!$key) return null; // legacy callers remain compatible
+        if (!is_string($key) || !preg_match('/^[a-zA-Z0-9_-]{16,64}$/D',$key)) throw new InvalidArgumentException('Некорректный ключ запроса.');
+        return array('key'=>(int)$this->modx->user->get('id').':'.$key,'op'=>$operation,'hash'=>hash('sha256',json_encode($payload)));
     }
     private function revision($s,$value)
     {
@@ -126,9 +157,11 @@ class PlanPoint
         $section=trim(isset($data['section'])?$data['section']:'');
         if ($section!=='' && !preg_match('/^[\p{L}\p{N}_-]{1,64}$/u',$section)) throw new InvalidArgumentException('Некорректная секция.');
         $doc=PlanPointDocument::parse($data['svg_code']);
-        $image=$this->image($data['image_path']); // server authoritative, never trusts posted URL/dimensions
-        return $this->transaction($houseId,function() use($data,$id,$houseId,$title,$section,$doc,$image) {
-            $image=$this->image($data['image_path']); // recheck under global reference lock
+        $existing=$id?$this->get($id):null;
+        $imageSource=isset($data['image_source'])?(int)$data['image_source']:($existing&&$existing['image']['path']===$data['image_path']?(int)$existing['image']['source']:0);
+        $image=$imageSource?$this->imageFromSource($data['image_path'],$imageSource):$this->image($data['image_path']);
+        return $this->transaction($houseId,function() use($data,$id,$houseId,$title,$section,$doc,$image,$imageSource) {
+            $image=$imageSource?$this->imageFromSource($data['image_path'],$imageSource):$this->image($data['image_path']);
             $user=(int)$this->modx->user->get('id'); $now=date('Y-m-d H:i:s');
             $values=array($title,$section,json_encode($image,JSON_UNESCAPED_UNICODE),$doc['svg'],empty($data['show_pins'])?0:1,$user,$now);
             if ($id) {
@@ -143,7 +176,7 @@ class PlanPoint
                 $id=(int)$this->db->lastInsertId();
             }
             return $this->get($id);
-        });
+        },$id?null:$this->request('create',isset($data['request_key'])?$data['request_key']:null,array($houseId,$title,$section,$data['image_path'],$image['source'],$doc['svg'],empty($data['show_pins'])?0:1)));
     }
     public function assign($schemeId,$selected,$snapshot,$confirmed=false)
     {
@@ -151,9 +184,10 @@ class PlanPoint
         $available=$this->floors($houseId); $map=array(); foreach($available as $f) $map[(int)$f['id']]=$f;
         $selected=array_values(array_unique(array_map('intval',$selected)));
         foreach($selected as $fid) if (!isset($map[$fid])) throw new InvalidArgumentException('Этаж не принадлежит дому или недоступен.');
-        return $this->transaction($houseId,function()use($schemeId,$selected,$snapshot,$map){
+        return $this->transaction($houseId,function()use($schemeId,$selected,$snapshot,$map,$houseId){
             $this->get($schemeId); // deletion may have happened before acquiring lock
             foreach($map as $fid=>$f) {
+                if ((int)$this->houseForFloor($fid)->get('id')!==$houseId) throw new RuntimeException('Этаж перемещён в другой дом. Обновите назначения.');
                 $current=$this->query("SELECT * FROM {$this->a} WHERE floor_id=?",array($fid))->fetch(PDO::FETCH_ASSOC);
                 $before=isset($snapshot[(string)$fid])?$snapshot[(string)$fid]:null;
                 if (json_encode($current?:null)!==json_encode($before?:null)) throw new RuntimeException('Назначения изменились. Откройте окно заново.');
@@ -166,7 +200,7 @@ class PlanPoint
                 $this->query("DELETE FROM {$this->a} WHERE floor_id=?",array($fid));
                 $this->query("INSERT INTO {$this->a} (floor_id,scheme_id,revision,updated_by,updated_at) VALUES (?,?,?,?,?)",array($fid,(int)$schemeId,$before?(int)$before['revision']+1:1,(int)$this->modx->user->get('id'),date('Y-m-d H:i:s')));
             }
-            
+
             $affected=$selected;
             foreach($snapshot as $fid=>$assignment) if (isset($map[(int)$fid]) && $assignment && (int)$assignment['scheme_id']===(int)$schemeId) $affected[]=(int)$fid;
             return array('assigned'=>count($selected),'affected_floor_ids'=>array_values(array_unique($affected)));
@@ -194,7 +228,7 @@ class PlanPoint
             return $this->floorInfo($floorId);
         });
     }
-    public function copy($ids,$target)
+    public function copy($ids,$target,$requestKey=null)
     {
         $this->house($target); $ids=array_values(array_unique(array_map('intval',$ids)));
         if (!$ids || count($ids)>100) throw new InvalidArgumentException('Выберите от 1 до 100 схем.');
@@ -205,18 +239,19 @@ class PlanPoint
                 $this->query("INSERT INTO {$this->s} (house_id,title,section,image_json,svg_code,show_pins,created_by,updated_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",array((int)$target,mb_substr('Копия '.$s['title'],0,255),$s['section'],$s['image_json'],$s['svg_code'],$s['show_pins'],$u,$u,$now,$now));
                 $out[]=$this->get((int)$this->db->lastInsertId());
             } return $out;
-        });
+        },$this->request('copy',$requestKey,array($ids,(int)$target)));
     }
     public function remove($id,$revision,$deleteFile)
     {
         $s=$this->get($id);
         $result=$this->transaction($s['house_id'],function()use($id,$revision){
             $s=$this->get($id); $this->revision($s,$revision);
-            $this->query("UPDATE {$this->a} SET scheme_id=0,revision=revision+1 WHERE scheme_id=?",array((int)$id));
+            $this->query("UPDATE {$this->a} SET scheme_id=0,revision=revision+1,updated_by=?,updated_at=? WHERE scheme_id=?",array((int)$this->modx->user->get('id'),date('Y-m-d H:i:s'),(int)$id));
             $this->query("DELETE FROM {$this->s} WHERE id=?",array((int)$id));
             return array('deleted'=>true,'file_preserved'=>true,'affected_floor_ids'=>array_map(function($a){return (int)$a['floor_id'];},$s['assignments']),'message'=>'Схема и назначения удалены. Изображение сохранено.');
         });
         if (!$deleteFile) return $result;
+        $this->house($s['house_id']);
         try {
             return $this->transaction($s['house_id'],function()use($s,$result){
                 $count=0;
@@ -229,16 +264,16 @@ class PlanPoint
                 $folder=trim($this->modx->getOption('planpoint.image_folder',null,'plans'),'/').'/';
                 if (strpos($s['image']['path'],$folder)!==0) { $result['message']='Схема удалена. Изображение вне папки модуля сохранено.'; return $result; }
                 $this->image($s['image']['path']);
-                $source=modMediaSource::getDefaultSource($this->modx,(int)$s['image']['source'],false); $source->initialize();
+                $source=PlanPointPlatform::source($this->modx,(int)$s['image']['source']); $source->initialize();
                 if (!$source->checkPolicy('remove') || !$source->removeObject($s['image']['path'])) throw new RuntimeException('Источник не разрешил удалить изображение.');
                 $result['file_preserved']=false; $result['message']='Схема, назначения и изображение удалены.'; return $result;
             });
-        } catch(Throwable $e) { $this->modx->log(modX::LOG_LEVEL_ERROR,'[PlanPoint file removal] '.$e->getMessage()); $result['message']='Схема удалена, изображение сохранено: '.$e->getMessage(); return $result; }
+        } catch(Throwable $e) { $this->modx->log(1,'[PlanPoint file removal] '.$e->getMessage()); $result['message']='Схема удалена, изображение сохранено: '.$e->getMessage(); return $result; }
     }
     public function imageTV()
     {
         $name=trim($this->modx->getOption('planpoint.image_tv',null,'imgMigx'));
-        return $name?$this->modx->getObject('modTemplateVar',array('name'=>$name)):null;
+        return $name?$this->modx->getObject(PlanPointPlatform::model('modTemplateVar'),array('name'=>$name)):null;
     }
     public function sourceId()
     {
@@ -261,13 +296,13 @@ class PlanPoint
         $path=str_replace(array('{id}','{pid}'),array($houseId,$house->get('parent')),isset($opts['path'])?$opts['path']:'');
         return array('tv_id'=>(int)$tv->get('id'),'source'=>$this->sourceId(),'ms_id'=>$this->sourceId(),'res_id'=>(int)$houseId,'res_alias'=>$house->get('alias'),'p_id'=>(int)$house->get('parent'),'p_alias'=>'','ctx'=>$this->mediaContext,'ctx_path'=>$source->getBaseUrl(),'openPath'=>$path,'acceptedMIMEtypes'=>'image/png,image/jpeg','prefixFilename'=>!empty($opts['prefixFilename'])&&in_array(strtolower((string)$opts['prefixFilename']),array('1','true','yes','да',strtolower($this->modx->lexicon('yes'))),true),'triggerlist'=>'clear,manager,pc,url','removeFile'=>false,'showPreview'=>false,'onlyEdit'=>true);
     }
-    public function image($path)
+    public function image($path) { return $this->imageFromSource($path,$this->sourceId()); }
+    public function imageFromSource($path,$sourceId)
     {
-        $sourceId=$this->sourceId();
-        $this->modx->loadClass('sources.modMediaSource');
-        $source=modMediaSource::getDefaultSource($this->modx,$sourceId,false);
+
+        $source=PlanPointPlatform::source($this->modx,$sourceId);
         if (!$source || !$source->initialize() || !$source->checkPolicy('view')) throw new RuntimeException('Источник файлов недоступен.');
-        if ($source->get('class_key')!=='sources.modFileMediaSource') throw new InvalidArgumentException('Первая альфа поддерживает файловый источник MODX.');
+        if (!in_array($source->get('class_key'),array('sources.modFileMediaSource',PlanPointPlatform::model('sources.modFileMediaSource')),true)) throw new InvalidArgumentException('Первая альфа поддерживает файловый источник MODX.');
         $path=trim($path); $public=$source->getObjectUrl('');
         if ($public && strpos($path,$public)===0) $path=substr($path,strlen($public));
         $path=ltrim(str_replace('\\','/',trim($path)),'/');
@@ -282,9 +317,9 @@ class PlanPoint
     }
     public function upload($file)
     {
-        $this->modx->loadClass('sources.modMediaSource');
-        $source=modMediaSource::getDefaultSource($this->modx,$this->sourceId(),false);
-        if (!$source || !$source->initialize() || !$source->checkPolicy('create') || $source->get('class_key')!=='sources.modFileMediaSource') throw new RuntimeException('Нет права загрузки в файловый источник.');
+
+        $source=PlanPointPlatform::source($this->modx,$this->sourceId());
+        if (!$source || !$source->initialize() || !$source->checkPolicy('create') || !in_array($source->get('class_key'),array('sources.modFileMediaSource',PlanPointPlatform::model('sources.modFileMediaSource')),true)) throw new RuntimeException('Нет права загрузки в файловый источник.');
         if ($file['error']!==UPLOAD_ERR_OK || !is_uploaded_file($file['tmp_name']) || $file['size']>20*1024*1024) throw new InvalidArgumentException('Ошибка загрузки или файл больше 20 МБ.');
         $info=@getimagesize($file['tmp_name']);
         if (!$info || !in_array($info[2],array(IMAGETYPE_PNG,IMAGETYPE_JPEG),true)) throw new InvalidArgumentException('Нужен PNG или JPG.');
@@ -304,25 +339,28 @@ class PlanPoint
             $house=$this->houseForFloor($floorId,false);
             $row=$this->query("SELECT scheme_id FROM {$this->a} WHERE floor_id=?",array((int)$floorId))->fetch(PDO::FETCH_ASSOC);
             if (!$row || !(int)$row['scheme_id']) return $inner?'':$this->modx->getChunk($empty);
-            $s=$this->get($row['scheme_id'],false);
+            $s=$this->get($row['scheme_id'],false,false);
             if ((int)$s['house_id']!==(int)$house->get('id')) return $inner?'':$this->modx->getChunk($empty);
-            $doc=PlanPointDocument::parse($s['svg_code']); $svg=$s['svg_code'];
+            $doc=PlanPointDocument::parse($s['svg_code'],false); $svg=$s['svg_code'];
             if (!$s['show_pins']) { $d=new DOMDocument(); $d->loadXML($svg,LIBXML_NONET); foreach(iterator_to_array($d->getElementsByTagName('circle')) as $n) $n->parentNode->removeChild($n); $svg=$d->saveXML($d->documentElement); }
             $esc=function($v){return str_replace(array('[',']','{','}'),array('&#91;','&#93;','&#123;','&#125;'),htmlspecialchars($v,ENT_QUOTES,'UTF-8'));};
             if ($inner) return '<picture><img class="plan-svg__img" src="'.$esc($s['image']['url']).'" alt="'.$esc($s['title']).'" width="'.(int)$s['image']['width'].'" height="'.(int)$s['image']['height'].'"></picture>'.$svg;
             return $this->modx->getChunk($tpl,array('scheme_id'=>$s['id'],'house_id'=>$s['house_id'],'floor_id'=>(int)$floorId,'title'=>$esc($s['title']),'image_url'=>$esc($s['image']['url']),'image_width'=>$s['image']['width'],'image_height'=>$s['image']['height'],'viewbox'=>$doc['viewbox'],'svg'=>$svg));
-        } catch(Throwable $e) { $this->modx->log(modX::LOG_LEVEL_ERROR,'[PlanPoint] '.$e->getMessage()); return $inner?'':$this->modx->getChunk($empty); }
+        } catch(Throwable $e) { $this->modx->log(1,'[PlanPoint] '.$e->getMessage()); return $inner?'':$this->modx->getChunk($empty); }
     }
     public function refreshCache($floorIds)
     {
+        $failed=array();
+        if (!$floorIds) return $failed;
         // A scheme affects floor pages only. Never clean lexicons/scripts/menu or fire global OnCacheUpdate.
         $this->modx->getCacheManager();
         foreach(array_unique(array_map('intval',$floorIds)) as $id) {
             if ($id<=0) continue;
             try {
-                $resource=$this->modx->getObject('modResource',array('id'=>$id));
+                $resource=$this->modx->getObject(PlanPointPlatform::model('modResource'),array('id'=>$id));
                 if ($resource) $resource->clearCache();
-            } catch(Throwable $e) { $this->modx->log(modX::LOG_LEVEL_ERROR,'[PlanPoint cache #'.$id.'] '.$e->getMessage()); }
+            } catch(Throwable $e) { $failed[]=$id; $this->modx->log(1,'[PlanPoint cache #'.$id.'] '.$e->getMessage()); }
         }
+        return $failed;
     }
 }

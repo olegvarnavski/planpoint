@@ -2,11 +2,12 @@
 'use strict';
 var knownSchemeTitles={},C=window.PlanPointConfig, E=Ext.util.Format.htmlEncode, G=window.PlanPointGeometry;
 if(!C)return;
+function requestKey(){var a=new Uint8Array(16);window.crypto.getRandomValues(a);return Array.from(a).map(function(n){return ('0'+n.toString(16)).slice(-2);}).join('');}
 function fail(message){Ext.Msg.alert('PlanPoint',E(String(message)));}
 function api(op,params,done,onFailure){
     Ext.Ajax.request({url:C.connector,method:'POST',params:Ext.apply({action:'api',op:op,HTTP_MODAUTH:MODx.siteId},params||{}),
-        success:function(r){try{var a=Ext.decode(r.responseText);if(!a.success){if(onFailure)onFailure();fail(a.message||'Ошибка запроса');return;}done(a.object.data);}catch(e){if(onFailure)onFailure();fail(e.message);}},
-        failure:function(){if(onFailure)onFailure();fail('Сервер недоступен. Изменения на экране сохранены.');}});
+        success:function(r){try{var a=Ext.decode(r.responseText);if(!a.success){if(onFailure)onFailure();fail(a.message||'Ошибка запроса');return;}if(a.object.data&&a.object.data.cache_warning)MODx.msg.status({title:'PlanPoint',message:E(a.object.data.cache_warning)});done(a.object.data);}catch(e){if(onFailure)onFailure();fail(e.message);}},
+        failure:function(){if(onFailure)onFailure();fail('Сервер недоступен. Данные остаются в открытом редакторе; сохранение на сервер не подтверждено.');}});
 }
 function field(label,value){return new Ext.form.TextField({fieldLabel:label,value:value||'',anchor:'96%'});}
 var imageBrowser=null,imageCallback=null;
@@ -41,20 +42,20 @@ function imagePicker(current,callback){
     }
 }
 function creation(refresh){
-    var title=field('Название'),section=field('Подъезд/Секция'),imageField=field('Изображение'),image=null,pins=new Ext.form.Checkbox({fieldLabel:'SVG-точки',checked:true});
+    var createKey=requestKey(),creating=false;var title=field('Название'),section=field('Подъезд/Секция'),imageField=field('Изображение'),image=null,pins=new Ext.form.Checkbox({fieldLabel:'SVG-точки',checked:true});
     section.emptyText='Необязательно. Например: 2';imageField.setReadOnly(true);
     var setImage=function(i){image=i;imageField.setValue(i.path+' ('+i.width+' × '+i.height+')');};
     var previewBox=new Ext.Panel({border:false,html:'<div class="pe-create-preview">Готовое изображение PNG или JPG<br><small>Без обрезки и изменения размеров</small></div>'});
     var originalSetImage=setImage;setImage=function(i){originalSetImage(i);previewBox.update('<div class="pe-create-preview"><img src="'+E(i.url)+'" alt=""></div>');};
     var form=new Ext.form.FormPanel({bodyStyle:'padding:18px',labelAlign:'top',items:[title,section,previewBox,{xtype:'button',text:'Выбрать изображение',handler:function(){imagePicker(image,setImage);}},imageField,pins]});
     var win=new Ext.Window({title:'Добавить схему',modal:true,width:560,autoHeight:true,items:[form],buttons:[{text:'Создать и открыть',handler:function(){
-        if(!title.getValue().trim()||!image){fail('Укажите название и изображение.');return;}
-        api('save',{house_id:C.houseId,title:title.getValue(),section:section.getValue(),image_path:image.path,show_pins:pins.getValue()?1:0,svg_code:'<svg class="plan-svg__svg" viewBox="0 0 '+image.width+' '+image.height+'" xmlns="http://www.w3.org/2000/svg"></svg>'},function(s){win.close();refresh();edit(s,refresh);});
+        if(creating)return;if(!title.getValue().trim()||!image){fail('Укажите название и изображение.');return;}
+        creating=true;win.getEl().mask('Создание…');api('save',{request_key:createKey,house_id:C.houseId,title:title.getValue(),section:section.getValue(),image_path:image.path,image_source:image.source,show_pins:pins.getValue()?1:0,svg_code:'<svg class="plan-svg__svg" viewBox="0 0 '+image.width+' '+image.height+'" xmlns="http://www.w3.org/2000/svg"></svg>'},function(s){win.close();refresh();edit(s,refresh);},function(){creating=false;win.getEl().unmask();});
     }},{text:'Отмена',handler:function(){win.close();}}]});win.show();
 }
 function assignments(s,refresh){
     api('floors',{house_id:C.houseId},function(floors){
-        var snapshot={},root=new Ext.tree.TreeNode({text:'Все этажи',expanded:true}),groups={};
+        var snapshot={},root=new Ext.tree.TreeNode({text:'Все этажи',expanded:true}),groups=Object.create(null);
         floors.forEach(function(f){snapshot[f.id]=f.assignment;var group=f.section||'Без подъезда';if(!groups[group])groups[group]=root.appendChild(new Ext.tree.TreeNode({text:E(group),expanded:true,checked:false}));
             var suffix=f.assignment&&Number(f.assignment.scheme_id)>0&&Number(f.assignment.scheme_id)!==Number(s.id)?' — '+(knownSchemeTitles[f.assignment.scheme_id]||('схема #'+f.assignment.scheme_id)):'';
             groups[group].appendChild(new Ext.tree.TreeNode({text:E((f.number||f.title)+suffix),id:'pe-floor-'+f.id,leaf:true,checked:!!(f.assignment&&Number(f.assignment.scheme_id)===Number(s.id)),floor:f}));
@@ -100,8 +101,8 @@ function edit(s,refresh){
     var panelId=Ext.id(),host=new Ext.Panel({region:'center',layout:'fit',border:false,html:'<div id="'+panelId+'" style="height:100%"></div>',listeners:{afterrender:function(){loadCanvas();}}});
     var properties=new Ext.form.FormPanel({region:'east',title:'Выбранный контур',width:260,minSize:220,split:true,autoScroll:true,labelAlign:'top',bodyStyle:'padding:18px',cls:'pe-properties',items:[number,keyField,{xtype:'container',layout:'column',height:62,width:215,defaults:{width:48,style:'margin-right:8px'},items:[{xtype:'button',icon:toolIcon('pin'),tooltip:'Поставить SVG-точку в центре выбранной области',handler:function(){canvas.movePinToCenter();}},{xtype:'button',icon:toolIcon('copy'),tooltip:'Копировать контур с тем же ключом',handler:function(){if(canvas.selected<0)return;canvas.remember();var a=canvas.areas[canvas.selected];canvas.areas.push({key:a.key,d:a.d,points:a.points.map(function(p){return p.slice();})});canvas.selected=canvas.areas.length-1;canvas.touch();canvas.render();selected(canvas.areas[canvas.selected]);}},{xtype:'button',icon:toolIcon('trash'),tooltip:'Удалить выбранную область',handler:function(){canvas.deleteArea();}}]}]});
     function updateStatus(){if(!canvas)return;statusText.setText('<span class="'+(dirty?'pe-unsaved':'pe-saved')+'">'+E(dirty?'Есть изменения':saveText)+'</span>');if(win)win.setTitle('PlanPoint · '+E(title.getValue())+(dirty?' *':''));if(selectButton){selectButton.toggle(!canvas.drawMode&&!canvas.panMode,true);drawButton.toggle(canvas.drawMode,true);handButton.toggle(canvas.panMode,true);if(angleButton)angleButton.toggle(canvas.ortho,true);}}
-    function changed(){dirty=true;updateStatus();}
-    function selected(a){syncing=true;keyField.setValue(a?a.key:'');var match=a&&/^x(.*?)-(.*)$/.exec(a.key);number.setValue(match?match[2]:'');[number,keyField].forEach(function(f){f.setDisabled(!a);});syncing=false;updateStatus();}
+    function changed(){dirty=true;if(canvas&&canvas.scheme.image){s.image=canvas.scheme.image;if(imagePreview&&imagePreview.rendered)imagePreview.update('<div class="pp-image-preview"><img src="'+E(s.image.url)+'" alt=""></div>');}updateStatus();}
+    function selected(a){syncing=true;keyField.setValue(a?a.key:'');var prefix='x'+section.getValue().trim()+'-';number.setValue(a&&a.key.indexOf(prefix)===0?a.key.slice(prefix.length):'');[number,keyField].forEach(function(f){f.setDisabled(!a);});syncing=false;updateStatus();}
     function loadCanvas(){if(canvas)canvas.destroy();canvas=new window.PlanPointCanvas(document.getElementById(panelId),s,changed,selected);canvas.isActive=function(){return Ext.WindowMgr.getActive()===win&&tabs.getActiveTab()===editorPanel;};selected(null);updateStatus();}
     function rename(fromKey){if(syncing||!canvas||canvas.selected<0)return;try{canvas.rename(fromKey?keyField.getValue().trim():G.key(section.getValue().trim(),number.getValue().trim()));selected(canvas.areas[canvas.selected]);}catch(e){fail(e.message);}}
     number.on('change',function(){rename(false);});keyField.on('change',function(){rename(true);});
@@ -132,15 +133,16 @@ function edit(s,refresh){
     }
     function fullCode(){var div=document.createElement('div');div.className='plan-svg';var picture=document.createElement('picture'),img=document.createElement('img');img.setAttribute('src',s.image.url);img.setAttribute('alt',title.getValue());img.className='plan-svg__img';picture.appendChild(img);div.appendChild(picture);var svg=new DOMParser().parseFromString(canvas.serialize(),'image/svg+xml').documentElement;div.appendChild(document.importNode(svg,true));return div.outerHTML;}
     function replaceImage(image){
-        s.image=image;canvas.view=[0,0,image.width,image.height];canvas.svg.setAttribute('viewBox',canvas.view.join(' '));canvas.svg.style.aspectRatio=image.width+'/'+image.height;canvas.touch();canvas.fit();
+        canvas.remember();s.image=image;canvas.scheme.image=image;canvas.view=[0,0,image.width,image.height];canvas.svg.setAttribute('viewBox',canvas.view.join(' '));canvas.svg.style.aspectRatio=image.width+'/'+image.height;canvas.touch();canvas.fit();
     }
     function saveScheme(){
-        if(saving||!canvas)return;
-        if(canvas.draft&&canvas.draft.length){if(!window.confirm('Отбросить только незамкнутый контур и сохранить остальные?'))return;canvas.draft=null;canvas.render();}
+        if(saving||!canvas)return;var discardDraft=false;
+        if(canvas.draft&&canvas.draft.length){if(!window.confirm('Отбросить только незамкнутый контур и сохранить остальные?'))return;discardDraft=true;}
         var used=!!(s.assignments&&s.assignments.length);
         function submit(){
+            if(discardDraft){canvas.remember();canvas.draft=null;canvas.render();}
             saving=true;saveButton.setDisabled(true);win.getEl().mask('Сохранение…');
-            api('save',{id:s.id,house_id:C.houseId,title:title.getValue(),section:section.getValue(),image_path:s.image.path,svg_code:canvas.serialize(),show_pins:pins.getValue()?1:0,revision:s.revision,confirm_used:used?1:0},function(updated){
+            api('save',{id:s.id,house_id:C.houseId,title:title.getValue(),section:section.getValue(),image_path:s.image.path,image_source:s.image.source,svg_code:canvas.serialize(),show_pins:pins.getValue()?1:0,revision:s.revision,confirm_used:used?1:0},function(updated){
                 var selectedIndex=canvas.selected,zoom=canvas.scale,draw=canvas.drawMode;s=updated;dirty=false;saving=false;saveText='Сохранено в '+new Date().toLocaleTimeString();win.getEl().unmask();saveButton.setDisabled(false);loadCanvas();canvas.zoom(zoom);if(selectedIndex>=0&&selectedIndex<canvas.areas.length)canvas.selectArea(selectedIndex);if(draw)canvas.start();updateStatus();refresh();
             },function(){saving=false;saveButton.setDisabled(false);win.getEl().unmask();updateStatus();});
         }
@@ -169,14 +171,14 @@ function copySchemes(schemes,refresh){
     api('houses',{},function(houses){
         var store=new Ext.data.ArrayStore({fields:['id','caption'],data:houses.map(function(h){return[h.id,h.title+' (#'+h.id+')'];})});
         var choice=new Ext.form.ComboBox({fieldLabel:'Дом назначения',store:store,valueField:'id',displayField:'caption',tpl:'<tpl for="."><div class="x-combo-list-item">{caption:htmlEncode}</div></tpl>',mode:'local',triggerAction:'all',editable:false,value:C.houseId,anchor:'100%'});
-        var w=new Ext.Window({title:'Копировать '+schemes.length+' схем',modal:true,width:480,autoHeight:true,items:[{xtype:'form',bodyStyle:'padding:18px',labelAlign:'top',items:[choice,{xtype:'displayfield',value:'Создадутся копии без назначений этажам. Изображения останутся общими, номера и секция сохранятся.'}]}],buttons:[{text:'Копировать',handler:function(){if(!choice.getValue()){fail('Выберите дом.');return;}api('copy',{ids:Ext.encode(schemes.map(function(s){return s.id;})),target:choice.getValue()},function(){w.close();refresh();});}},{text:'Отмена',handler:function(){w.close();}}]});w.show();
+        var copyKey=requestKey(),copying=false;var w=new Ext.Window({title:'Копировать '+schemes.length+' схем',modal:true,width:480,autoHeight:true,items:[{xtype:'form',bodyStyle:'padding:18px',labelAlign:'top',items:[choice,{xtype:'displayfield',value:'Создадутся копии без назначений этажам. Изображения останутся общими, номера и секция сохранятся.'}]}],buttons:[{text:'Копировать',handler:function(){if(copying)return;if(!choice.getValue()){fail('Выберите дом.');return;}copying=true;w.getEl().mask('Копирование…');api('copy',{request_key:copyKey,ids:Ext.encode(schemes.map(function(s){return s.id;})),target:choice.getValue()},function(){w.close();refresh();},function(){copying=false;w.getEl().unmask();});}},{text:'Отмена',handler:function(){w.close();}}]});w.show();
     });
 }
 function removeScheme(s,refresh){
     var summary=G.floorSummary(s.floor_labels);
     Ext.Msg.confirm('Удалить схему «'+E(s.title)+'»?',E(summary)+'. Удалятся схема и её назначения. Продолжить?',function(answer){
         if(answer!=='yes')return;
-        Ext.Msg.show({title:'Изображение схемы',msg:'Удалить также изображение? Общий файл или файл вне папки модуля будет сохранён. Внешние ссылки в коде сайта не проверяются.',buttons:Ext.Msg.YESNOCANCEL,fn:function(answer){if(answer==='cancel')return;api('remove',{id:s.id,revision:s.revision,confirm:1,delete_file:answer==='yes'?1:0},function(data){refresh();});}});
+        Ext.Msg.show({title:'Изображение схемы',msg:'Удалить также изображение? Общий файл или файл вне папки модуля будет сохранён. Внешние ссылки в коде сайта не проверяются.',buttons:Ext.Msg.YESNOCANCEL,fn:function(answer){if(answer==='cancel')return;api('remove',{id:s.id,revision:s.revision,confirm:1,delete_file:answer==='yes'?1:0},function(data){refresh();if(data.file_preserved)MODx.msg.status({title:'PlanPoint',message:E(data.message)});});}});
     });
 }
 function actionIcon(name){
@@ -189,7 +191,7 @@ function makePanel(){
     var copyButton=new Ext.Button({text:'Копировать выбранные',disabled:true,handler:function(){copySchemes(sm.getSelections().map(function(r){return r.data;}),refresh);}});
     var grid=new Ext.grid.GridPanel({store:store,sm:sm,cls:'pe-scheme-grid',autoHeight:true,stripeRows:true,viewConfig:{forceFit:true,emptyText:'<div class="pe-empty"><b>Добавьте первую схему</b><br>Выберите готовое изображение, обведите помещения и назначьте схему этажам.</div>',deferEmptyText:false},columns:[sm,{header:'Схема',dataIndex:'image',width:112,sortable:false,fixed:true,renderer:function(image){return image?'<img class="pe-thumb" src="'+E(image.url)+'" alt="">':'';}},{header:'Название',dataIndex:'title',width:235,sortable:true,renderer:function(v,meta,r){return '<div class="pe-row-title">'+E(v)+'</div><div class="pe-row-meta">'+r.data.image.width+' × '+r.data.image.height+' · '+(r.data.assignments.length?'Назначена этажам':'Без назначений')+'</div>';}},{header:'Этажи',dataIndex:'floor_labels',width:330,renderer:function(f){return '<div class="pe-floor-summary">'+E(G.floorSummary(f))+'</div>';}},{header:'Действия',width:450,fixed:true,sortable:false,renderer:function(){return '<div class="pp-actions">'+[['preview','Просмотр'],['edit','Изменить'],['assign','Этажи'],['copy','Копия'],['delete','Удалить']].map(function(a){return '<button type="button" data-act="'+a[0]+'" class="pp-row-button '+(a[0]==='delete'?'pp-remove':'')+'">'+a[1]+'</button>';}).join('')+'</div>';}}
     ],tbar:[{text:'Добавить схему',cls:'primary-button',handler:function(){creation(refresh);}},copyButton,'->',search,{text:'Обновить',handler:refresh}],bbar:[count]});
-    function dispatch(action,record){var s=record.data;if(action==='preview')preview(s);if(action==='edit')api('get',{id:s.id},function(data){edit(data,refresh);});if(action==='assign')assignments(s,refresh);if(action==='copy')copySchemes([s],refresh);if(action==='delete')removeScheme(s,refresh);}
+    function dispatch(action,record){var s=record.data;if(action==='preview')api('get',{id:s.id},preview);if(action==='edit')api('get',{id:s.id},function(data){edit(data,refresh);});if(action==='assign')assignments(s,refresh);if(action==='copy')copySchemes([s],refresh);if(action==='delete')removeScheme(s,refresh);}
     grid.on('cellclick',function(g,row,col,e){var button=e.getTarget('button[data-act]');if(button){e.stopEvent();dispatch(button.getAttribute('data-act'),store.getAt(row));}});
     grid.on('rowcontextmenu',function(g,row,e){e.stopEvent();sm.selectRow(row);var record=store.getAt(row);var menu=new Ext.menu.Menu({items:[{text:'Просмотреть',handler:function(){dispatch('preview',record);}},{text:'Редактировать',handler:function(){dispatch('edit',record);}},{text:'Назначить этажам',handler:function(){dispatch('assign',record);}},{text:'Копировать',handler:function(){dispatch('copy',record);}},'-',{text:'Удалить',handler:function(){dispatch('delete',record);}}]});menu.showAt(e.getXY());});
     sm.on('selectionchange',function(){copyButton.setDisabled(!sm.getCount());});

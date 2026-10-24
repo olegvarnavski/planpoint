@@ -55,7 +55,7 @@
     }
     function floorSummary(floors) {
         if(!floors || !floors.length)return 'Не назначена';
-        var groups={};floors.forEach(function(f){var k=f.section||'';if(!groups[k])groups[k]=[];groups[k].push(f);});
+        var groups=Object.create(null);floors.forEach(function(f){var k=f.section||'';if(!groups[k])groups[k]=[];groups[k].push(f);});
         return Object.keys(groups).sort().map(function(group){
             var nums=[],other=[];groups[group].forEach(function(f){var v=String(f.number==null?'':f.number).trim();if(/^-?\d+$/.test(v))nums.push(Number(v));else other.push(v||f.title||('#'+f.id));});
             nums=Array.from(new Set(nums)).sort(function(a,b){return a-b;});var parts=[];
