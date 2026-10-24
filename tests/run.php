@@ -28,10 +28,10 @@ class FakeMODX {
  function connect(){return true;}function getCacheManager(){return null;}
  function getOption($k,$options=null,$default=null){$o=array('table_prefix'=>'t_','planpoint.house_templates'=>'1','planpoint.section_templates'=>'2','planpoint.floor_templates'=>'8','planpoint.floor_number_field'=>'menutitle');return isset($o[$k])?$o[$k]:$default;}
  function getObject($class,$criteria){foreach($this->getCollection($class,$criteria)as$r)return $r;return null;}
- function getCollection($class,$criteria){$out=array();foreach($this->resources as $r){$matches=true;foreach($criteria as$k=>$v){if($k==='template:IN'){if(!in_array((int)$r->get('template'),$v,true))$matches=false;}elseif($r->get($k)!=$v)$matches=false;}if($matches)$out[]=$r;}return $out;}
+ function getCollection($class,$criteria){$out=array();foreach($this->resources as $r){$matches=true;foreach($criteria as$k=>$v){if($k==='template:IN'){if(!in_array((int)$r->get('template'),$v,true))$matches=false;}elseif($k==='id:IN'){if(!in_array((int)$r->get('id'),$v,true))$matches=false;}elseif($r->get($k)!=$v)$matches=false;}if($matches)$out[]=$r;}return $out;}
 }
 $m=new FakeMODX();$driver=$m->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
-foreach(array('t_planpoint_assignments','t_planpoint_schemes','t_planpoint_locks')as$table)$m->pdo->exec('DROP TABLE IF EXISTS '.$table);
+foreach(array('t_planpoint_requests','t_planpoint_meta','t_planpoint_assignments','t_planpoint_schemes','t_planpoint_locks')as$table)$m->pdo->exec('DROP TABLE IF EXISTS '.$table);
 planpointInstallSchema($m->pdo,'t_',$driver);planpointInstallSchema($m->pdo,'t_',$driver);ok(true,'schema migration repeatable');
 function resource($id,$template,$parent,$denied=false){global $m;$m->resources[$id]=new FakeResource(array('id'=>$id,'template'=>$template,'parent'=>$parent,'deleted'=>0,'context_key'=>'web','pagetitle'=>'Ресурс '.$id,'menutitle'=>(string)$id,'denied'=>$denied));}
 resource(1,1,0);resource(2,2,1);resource(10,8,2);resource(11,8,1);resource(20,1,0);resource(21,8,20);resource(30,1,0,true);resource(31,8,30);resource(12,8,2,true);
@@ -55,7 +55,7 @@ rejects(function()use($pe,$b,$stale){$pe->assign($b,array(10),$stale);},'assign-
 $info=$pe->floorInfo(11);$pe->setFloor(11,$b,$info['assignment']);ok((int)$pe->floorInfo(11)['scheme']['id']===$b,'change one floor');
 ok(!$pe->floorInfo(10)['scheme'],'single-floor change leaves other floor unassigned');
 rejects(function()use($pe,$other){$pe->setFloor(11,$other,$pe->floorInfo(11)['assignment']);},'single-floor cross-house scheme rejected');
-class SaveEditor extends PlanPoint {public function image($path){if($path!=='plans/a.png')throw new InvalidArgumentException('Bad image');return array('source'=>1,'path'=>$path,'url'=>'/plans/a.png','width'=>1800,'height'=>840);}}
+class SaveEditor extends PlanPoint {public function imageFromSource($path,$sourceId){return $this->image($path);}public function image($path){if($path!=='plans/a.png')throw new InvalidArgumentException('Bad image');return array('source'=>1,'path'=>$path,'url'=>'/plans/a.png','width'=>1800,'height'=>840);}}
 $se=new SaveEditor($m);$input=array('house_id'=>1,'title'=>'Новая','section'=>'2','image_path'=>'plans/a.png','svg_code'=>$code,'show_pins'=>1);
 $saved=$se->save($input);ok((int)$saved['revision']===1,'create through save');$input['id']=$saved['id'];$input['revision']=1;$input['title']='Изменена';
 $saved=$se->save($input);ok((int)$saved['revision']===2,'save increments revision');
@@ -68,4 +68,19 @@ $se->refreshCache(array(10,10,11));ok($m->resources[10]->clears===1 && $m->resou
 ok($m->resources[1]->clears===0 && $m->resources[21]->clears===0,'unrelated house and floor cache untouched');
 ok($se->get($saved['id'])['floor_labels'][0]['number']==='10','assignment labels contain floor number');
 ok(count($se->houses())===2,'house selector lists only accessible house templates');
+rejects(function(){PlanPointDocument::points('M0 0 L0 0 L0 0 Z');},'identical vertices rejected');
+rejects(function(){PlanPointDocument::points('M0 0 L1 1 L2 2 Z');},'collinear contour rejected');
+ok(count(PlanPointDocument::parse(svg('<path class="path-item" data-i="x-1" d="M0 0 L1 1 L2 2 Z"/>'),false)['areas'])===1,'legacy degenerate contour remains renderable');
+rejects(function(){PlanPointDocument::parse(svg('<script/>'),false);},'legacy geometry mode keeps active SVG protection');
+// Audit regressions: repeated mutation keys, small lists, and checked migration state.
+$create=array('house_id'=>1,'title'=>'Retry-safe','section'=>'','image_path'=>'plans/a.png','svg_code'=>$code,'show_pins'=>0,'request_key'=>'create_key_123456789');
+$once=$se->save($create);$twice=$se->save($create);ok($once['id']===$twice['id'],'create retry returns same scheme');
+$changed=$create;$changed['title']='Different';rejects(function()use($se,$changed){$se->save($changed);},'mutation key cannot be reused with different payload');
+$copy1=$se->copy(array($once['id']),20,'copy_key_123456789');$copy2=$se->copy(array($once['id']),20,'copy_key_123456789');ok($copy1[0]['id']===$copy2[0]['id'],'copy retry returns same copies');
+$list=$se->listing(1);ok(!array_key_exists('svg_code',$list[0])&&!array_key_exists('image_json',$list[0]),'listing omits heavy SVG and internal JSON');
+ok((int)$m->pdo->query('SELECT version FROM t_planpoint_meta WHERE id=1')->fetchColumn()===2,'schema version recorded');
+if($driver==='sqlite'){
+ $bad=new PDO('sqlite::memory:');$bad->setAttribute(PDO::ATTR_ERRMODE,PDO::ERRMODE_SILENT);$bad->exec('CREATE TABLE broken_planpoint_schemes (id INTEGER PRIMARY KEY)');
+ rejects(function()use($bad){planpointInstallSchema($bad,'broken_','sqlite');},'incomplete existing schema rejected even in silent PDO mode');
+}
 echo 'TOTAL '.$count.PHP_EOL;

@@ -3,7 +3,7 @@
 class PlanPointDocument
 {
     const MAX_CODE = 1048576;
-    public static function parse($code)
+    public static function parse($code,$checkGeometry=true)
     {
         if (!is_string($code) || strlen($code) > self::MAX_CODE || trim($code) === '') {
             throw new InvalidArgumentException('SVG пуст или превышает 1 МБ.');
@@ -38,7 +38,7 @@ class PlanPointDocument
                 self::attributes($node, array('class', 'data-i', 'd'));
                 if ($node->getAttribute('class') !== 'path-item') throw new InvalidArgumentException('У path нужен class="path-item".');
                 $key = self::key($node->getAttribute('data-i'));
-                $d = $node->getAttribute('d'); self::points($d);
+                $d = $node->getAttribute('d'); self::points($d,$checkGeometry);
                 $areas[] = array('key' => $key, 'd' => $d);
             } elseif ($node->tagName === 'circle') {
                 self::attributes($node, array('data-pin', 'cx', 'cy', 'r'));
@@ -68,7 +68,7 @@ class PlanPointDocument
         return $key;
     }
     /** Parse one closed straight subpath. Preserve original d separately. */
-    public static function points($d)
+    public static function points($d,$checkGeometry=true)
     {
         if (strlen($d) > 100000 || preg_match('/[^MLHVZmlhvz0-9eE+.,\s-]/', $d)) {
             throw new InvalidArgumentException('Версия 0.1 поддерживает один замкнутый путь M/L/H/V/Z. Кривые и составные пути не изменены: импорт отклонён.');
@@ -101,6 +101,13 @@ class PlanPointDocument
             if (count($p)>10000) throw new InvalidArgumentException('Слишком много вершин.');
         }
         if (!$closed || count($p)<3) throw new InvalidArgumentException('Нужен замкнутый контур минимум из трёх вершин.');
+        if ($checkGeometry) {
+        $distinct=array();foreach($p as $point)$distinct[json_encode($point)]=true;
+        if(count($distinct)<3)throw new InvalidArgumentException('Нужны минимум три различные вершины.');
+        $first=$p[0];$second=null;$nonlinear=false;
+        foreach($p as $point){if($second===null){if($point!==$first)$second=$point;continue;}if(abs(($second[0]-$first[0])*($point[1]-$first[1])-($second[1]-$first[1])*($point[0]-$first[0]))>0){$nonlinear=true;break;}}
+        if(!$nonlinear)throw new InvalidArgumentException('Вершины области не должны лежать на одной прямой.');
+        }
         // Ensure lexical leftovers aren't silently dropped (e.g. malformed exponent).
         $left=preg_replace('/[MLHVZmlhvz]|[-+]?(?:\d*\.\d+|\d+\.?\d*)(?:[eE][-+]?\d+)?|[\s,]+/', '', $d);
         if ($left !== '') throw new InvalidArgumentException('Некорректный path.');

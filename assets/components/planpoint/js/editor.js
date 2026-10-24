@@ -3,7 +3,7 @@
     var G=root.PlanPointGeometry, NS='http://www.w3.org/2000/svg';
     function el(tag, attrs, parent) { var e=document.createElementNS(NS,tag); Object.keys(attrs||{}).forEach(function(k){e.setAttribute(k,attrs[k]);}); if(parent)parent.appendChild(e); return e; }
     function Editor(container, scheme, onChange, onSelect) {
-        this.container=container; this.scheme=scheme; this.onChange=onChange||function(){}; this.onSelect=onSelect||function(){};
+        this.container=container; this.scheme=scheme;this.scheme.show_pins=!!Number(scheme.show_pins); this.onChange=onChange||function(){}; this.onSelect=onSelect||function(){};
         this.history=[];this.future=[];this.drawMode=false;this.ortho=false;this.shiftPressed=false;this.rawCursor=null;this.areas=[]; this.pins=[]; this.selected=-1; this.draft=null; this.drag=null; this.scale=1; this.original=scheme.svg_code; this.changed=false; this.panMode=false; this.spacePressed=false; this.isActive=function(){return true;};
         var doc=new DOMParser().parseFromString(scheme.svg_code,'image/svg+xml');
         if(doc.querySelector('parsererror'))throw Error('Некорректный SVG.');
@@ -38,9 +38,9 @@
         document.addEventListener('keydown',this.keyHandler,true);document.addEventListener('keyup',this.keyUpHandler);window.addEventListener('blur',this.blurHandler); this.render();
     }
     Editor.prototype.destroy=function(){document.removeEventListener('keydown',this.keyHandler,true);document.removeEventListener('keyup',this.keyUpHandler);window.removeEventListener('blur',this.blurHandler);};
-    Editor.prototype.snapshot=function(){return JSON.stringify({areas:this.areas,pins:this.pins,selected:this.selected,draft:this.draft,changed:this.changed,drawMode:this.drawMode});};
+    Editor.prototype.snapshot=function(){return JSON.stringify({areas:this.areas,pins:this.pins,selected:this.selected,draft:this.draft,changed:this.changed,drawMode:this.drawMode,view:this.view,image:this.scheme.image});};
     Editor.prototype.remember=function(){this.history.push(this.snapshot());if(this.history.length>100)this.history.shift();this.future=[];};
-    Editor.prototype.restore=function(raw){var state=JSON.parse(raw),self=this;Object.keys(state).forEach(function(k){self[k]=state[k];});this.drag=null;this.cursorPoint=null;this.rawCursor=null;this.render();this.onSelect(this.areas[this.selected]||null);this.onChange();};
+    Editor.prototype.restore=function(raw){var state=JSON.parse(raw),self=this;Object.keys(state).forEach(function(k){if(k==='image')self.scheme.image=state[k];else self[k]=state[k];});this.svg.setAttribute('viewBox',this.view.join(' '));this.svg.removeAttribute('width');this.svg.removeAttribute('height');this.svg.style.aspectRatio=this.view[2]+'/'+this.view[3];this.drag=null;this.cursorPoint=null;this.rawCursor=null;this.render();this.onSelect(this.areas[this.selected]||null);this.onChange();};
     Editor.prototype.undo=function(){if(!this.history.length)return;this.future.push(this.snapshot());this.restore(this.history.pop());};
     Editor.prototype.redo=function(){if(!this.future.length)return;this.history.push(this.snapshot());this.restore(this.future.pop());};
     Editor.prototype.cancel=function(){this.drag=null;this.cursorPoint=null;this.rawCursor=null;if(this.draft&&this.draft.length){this.remember();this.draft=[];}else{this.drawMode=false;this.draft=null;this.panMode=false;}this.render();this.onSelect(this.areas[this.selected]||null);};
@@ -122,7 +122,7 @@
         if(!this.changed)return this.original;
         var doc=new DOMParser().parseFromString(this.original,'image/svg+xml'),svg=doc.documentElement;
         Array.from(svg.children).forEach(function(n){if(n.localName==='path'||n.localName==='circle')svg.removeChild(n);});
-        svg.setAttribute('class','plan-svg__svg');svg.setAttribute('viewBox',this.view.join(' '));
+        svg.setAttribute('class','plan-svg__svg');svg.setAttribute('viewBox',this.view.join(' '));svg.removeAttribute('width');svg.removeAttribute('height');
         this.areas.forEach(function(a){var p=doc.createElementNS(NS,'path');p.setAttribute('class','path-item');p.setAttribute('data-i',a.key);p.setAttribute('d',a.d);svg.appendChild(p);});
         this.pins.forEach(function(a){var p=doc.createElementNS(NS,'circle');p.setAttribute('data-pin',a.key);p.setAttribute('cx',a.cx);p.setAttribute('cy',a.cy);p.setAttribute('r',a.r);svg.appendChild(p);});
         return new XMLSerializer().serializeToString(svg);
